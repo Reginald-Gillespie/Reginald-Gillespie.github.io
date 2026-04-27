@@ -1,117 +1,107 @@
-const params = new URLSearchParams(location.search);
-const action = params.get("action");
-const room = params.get("room");
-const returnTo = params.get("returnTo");
+var params     = new URLSearchParams(location.search);
+var action     = params.get("action");
+var room       = params.get("room");
+var returnTo   = params.get("returnTo");
+var fullAmount = parseInt(params.get("fullAmount") || "2", 10);
 
-const setStatus = (msg) => document.getElementById("status").innerHTML = msg;
-const log = (msg) => { document.getElementById("log").textContent += msg + "\n"; };
+var joined = 0;
 
-function bounce(extraParams = {}) {
-    if (!returnTo) { log("No returnTo param — cannot redirect."); return; }
+function setStatus(msg) { document.getElementById("status").innerHTML = msg; }
+function setLobby(msg)  { document.getElementById("lobby").textContent = msg; }
 
-    const dest = new URL(returnTo);
-    dest.searchParams.set("room", room);
-    for (const [k, v] of Object.entries(extraParams)) {
-        dest.searchParams.set(k, v);
-    }
-
-    // log(`↩ Returning to: ${dest.toString()}`);
-    location.href = dest.toString();
+function bounce(extraParams) {
+  extraParams = extraParams || {};
+  if (!returnTo) return;
+  var dest = new URL(returnTo);
+  dest.searchParams.set("room", room);
+  for (var k in extraParams) dest.searchParams.set(k, extraParams[k]);
+  setTimeout(function() { location.href = dest.toString(); }, 400);
 }
 
 if (!action || !room || !returnTo) {
-    setStatus("Missing params");
-    log("Required: action=, room=, returnTo=");
+  setStatus("Missing params.");
 } else if (action === "create") {
-    runCreate();
+  runCreate();
 } else if (action === "join") {
-    runJoin();
+  runJoin();
 } else {
-    setStatus("Unknown action: " + action);
-    bounce({ peerEvent: "error", detail: "unknown_action" });
+  bounce({ peerEvent: "error", detail: "unknown_action" });
+}
+
+function updateLobby(connectedCount) {
+  var waiting = fullAmount - connectedCount;
+  setLobby("Lobby: " + room + "\nWaiting for " + waiting + "/" + fullAmount + " more people to join.");
 }
 
 function runCreate() {
-    setStatus(`<span class="spinner">↻</span> Creating room <b>${room}</b>…`);
-    log(`action=create  room=${room}`);
+  // Host counts as 1
+  joined = 1;
+  updateLobby(joined);
+  setStatus('<span class="spinner">↻</span>');
 
-    const peer = new Peer(room);
+  var peer = new Peer(room);
 
-    peer.on("error", (err) => {
-        log("PeerJS error: " + err.message);
-        bounce({ peerEvent: "error", detail: err.message });
+  peer.on("error", function(err) {
+    bounce({ peerEvent: "error", detail: err.message });
+  });
+
+  peer.on("open", function() {
+    updateLobby(joined);
+
+    peer.on("connection", function(conn) {
+      conn.on("open", function() {
+        joined++;
+        updateLobby(joined);
+
+        if (joined >= fullAmount) {
+          setStatus("");
+          peer.destroy();
+          bounce({ peerEvent: "room_full", role: "host" });
+        }
+      });
     });
-
-    peer.on("open", (id) => {
-        log(`Peer open as: ${id}`);
-        setStatus(`<span class="spinner">↻</span> Room open. Waiting for Player B to connect…`);
-
-        const WAIT_MS = 30*1000;
-        let timer = setTimeout(() => {
-            log("No joiner in time — bouncing back so Player A can share the room code.");
-            setStatus("✓ Room created. Returning…");
-            peer.destroy();
-            bounce({ peerEvent: "room_created", role: "host" });
-        }, WAIT_MS);
-
-        peer.on("connection", (conn) => {
-            clearTimeout(timer);
-            log("Player B connected!");
-            setStatus("✓ Player B connected. Relaying…");
-
-            conn.on("open", () => {
-                conn.send("Welcome Player B");
-
-                conn.on("data", (data) => {
-                    log("Data from B: " + data);
-                    setStatus("✓ Got message from B. Returning…");
-                    peer.destroy();
-                    bounce({ peerEvent: "connected_as_host", role: "host", msg: data });
-                });
-            });
-        });
-    });
+  });
 }
 
 function runJoin() {
-    setStatus(`<span class="spinner">↻</span> Joining room <b>${room}</b>…`);
-    log(`action=join  room=${room}`);
+  setStatus('<span class="spinner">↻</span>');
+  setLobby("Lobby: " + room + "\nConnecting...");
 
-    const peer = new Peer();
+  var peer = new Peer();
 
-    peer.on("error", (err) => {
-        log("PeerJS error: " + err.message);
-        bounce({ peerEvent: "error", detail: err.message });
+  peer.on("error", function(err) {
+    bounce({ peerEvent: "error", detail: err.message });
+  });
+
+  peer.on("open", function() {
+    var conn = peer.connect(room);
+
+    var timer = setTimeout(function() {
+      peer.destroy();
+      bounce({ peerEvent: "error", detail: "connection_timeout" });
+    }, 10000);
+
+    conn.on("error", function(err) {
+      clearTimeout(timer);
+      peer.destroy();
+      bounce({ peerEvent: "error", detail: err.message });
     });
 
-    peer.on("open", () => {
-        log("Peer open. Connecting to host…");
-        const conn = peer.connect(room);
-
-        const timer = setTimeout(() => {
-            log("Timed out connecting to host.");
-            peer.destroy();
-            bounce({ peerEvent: "error", detail: "connection_timeout" });
-        }, 10000);
-
-        conn.on("error", (err) => {
-            clearTimeout(timer);
-            log("Conn error: " + err.message);
-            peer.destroy();
-            bounce({ peerEvent: "error", detail: err.message });
-        });
-
-        conn.on("open", () => {
-            log("Connected to host! Sending hello…");
-            conn.send("Hello from Player B");
-
-            conn.on("data", (data) => {
-                clearTimeout(timer);
-                log("Data from A: " + data);
-                setStatus("✓ Exchange complete. Returning…");
-                peer.destroy();
-                bounce({ peerEvent: "connected_as_joiner", role: "joiner", msg: data });
-            });
-        });
+    conn.on("open", function() {
+      clearTimeout(timer);
+      conn.send("__joined__");
+      setLobby("Lobby: " + room + "\nWaiting for others to join...");
     });
+
+    conn.on("data", function(data) {
+      if (data === "__full__") {
+        setStatus("");
+        peer.destroy();
+        bounce({ peerEvent: "connected_as_joiner", role: "joiner" });
+      } else if (typeof data === "number") {
+        var waiting = fullAmount - data;
+        setLobby("Lobby: " + room + "\nWaiting for " + waiting + "/" + fullAmount + " more people to join.");
+      }
+    });
+  });
 }

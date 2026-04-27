@@ -2,12 +2,23 @@
 <html>
 
 <head>
-    <title>P2P Relay</title>
+    <title>Relay</title>
     <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        #wrap {
+            text-align: center;
+        }
+
         .spinner {
             display: inline-block;
             animation: spin 0.8s linear infinite;
-            margin-right: 8px;
         }
 
         @keyframes spin {
@@ -15,20 +26,14 @@
                 transform: rotate(360deg);
             }
         }
-
-        #status {
-            font-size: 15px;
-            margin-bottom: 12px;
-        }
     </style>
 </head>
 
 <body>
-    <h2>Loading...</h2>
-    <div id="status"><span class="spinner">↻</span> Initializing…</div>
-    <div class="sub">Setting up lobby. If this step crashes, your particular network might not be supporteed.</div>
-    <pre id="log"></pre>
-
+    <div id="wrap">
+        <div id="status"><span class="spinner">↻</span></div>
+        <div id="lobby"></div>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <script src="./p2pRelayScript.js"></script>
 </body>
