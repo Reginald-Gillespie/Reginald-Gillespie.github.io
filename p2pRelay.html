@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>P2P Relay</title>
+    <style>
+        .spinner {
+            display: inline-block;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        #status {
+            font-size: 15px;
+            margin-bottom: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>Loading...</h2>
+    <div id="status"><span class="spinner">↻</span> Initializing…</div>
+    <div class="sub">Setting up lobby. If this step crashes, your particular network might not be supporteed.</div>
+    <pre id="log"></pre>
+
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script type>
+        const params = new URLSearchParams(location.search);
+        const action = params.get("action");
+        const room = params.get("room");
+        const returnTo = params.get("returnTo");
+
+        const setStatus = (msg) => document.getElementById("status").innerHTML = msg;
+        const log = (msg) => { document.getElementById("log").textContent += msg + "\n"; };
+
+        function bounce(extraParams = {}) {
+            if (!returnTo) { log("No returnTo param — cannot redirect."); return; }
+
+            const dest = new URL(returnTo);
+            dest.searchParams.set("room", room);
+            for (const [k, v] of Object.entries(extraParams)) {
+                dest.searchParams.set(k, v);
+            }
+
+            // log(`↩ Returning to: ${dest.toString()}`);
+            location.href = dest.toString();
+        }
+
+        if (!action || !room || !returnTo) {
+            setStatus("Missing params");
+            log("Required: action=, room=, returnTo=");
+        } else if (action === "create") {
+            runCreate();
+        } else if (action === "join") {
+            runJoin();
+        } else {
+            setStatus("Unknown action: " + action);
+            bounce({ peerEvent: "error", detail: "unknown_action" });
+        }
+
+        function runCreate() {
+            setStatus(`<span class="spinner">↻</span> Creating room <b>${room}</b>…`);
+            log(`action=create  room=${room}`);
+
+            const peer = new Peer(room);
+
+            peer.on("error", (err) => {
+                log("PeerJS error: " + err.message);
+                bounce({ peerEvent: "error", detail: err.message });
+            });
+
+            peer.on("open", (id) => {
+                log(`Peer open as: ${id}`);
+                setStatus(`<span class="spinner">↻</span> Room open. Waiting for Player B to connect…`);
+
+                const WAIT_MS = 30*1000;
+                let timer = setTimeout(() => {
+                    log("No joiner in time — bouncing back so Player A can share the room code.");
+                    setStatus("✓ Room created. Returning…");
+                    peer.destroy();
+                    bounce({ peerEvent: "room_created", role: "host" });
+                }, WAIT_MS);
+
+                peer.on("connection", (conn) => {
+                    clearTimeout(timer);
+                    log("Player B connected!");
+                    setStatus("✓ Player B connected. Relaying…");
+
+                    conn.on("open", () => {
+                        conn.send("Welcome Player B");
+
+                        conn.on("data", (data) => {
+                            log("Data from B: " + data);
+                            setStatus("✓ Got message from B. Returning…");
+                            peer.destroy();
+                            bounce({ peerEvent: "connected_as_host", role: "host", msg: data });
+                        });
+                    });
+                });
+            });
+        }
+
+        function runJoin() {
+            setStatus(`<span class="spinner">↻</span> Joining room <b>${room}</b>…`);
+            log(`action=join  room=${room}`);
+
+            const peer = new Peer();
+
+            peer.on("error", (err) => {
+                log("PeerJS error: " + err.message);
+                bounce({ peerEvent: "error", detail: err.message });
+            });
+
+            peer.on("open", () => {
+                log("Peer open. Connecting to host…");
+                const conn = peer.connect(room);
+
+                const timer = setTimeout(() => {
+                    log("Timed out connecting to host.");
+                    peer.destroy();
+                    bounce({ peerEvent: "error", detail: "connection_timeout" });
+                }, 10000);
+
+                conn.on("error", (err) => {
+                    clearTimeout(timer);
+                    log("Conn error: " + err.message);
+                    peer.destroy();
+                    bounce({ peerEvent: "error", detail: err.message });
+                });
+
+                conn.on("open", () => {
+                    log("Connected to host! Sending hello…");
+                    conn.send("Hello from Player B");
+
+                    conn.on("data", (data) => {
+                        clearTimeout(timer);
+                        log("Data from A: " + data);
+                        setStatus("✓ Exchange complete. Returning…");
+                        peer.destroy();
+                        bounce({ peerEvent: "connected_as_joiner", role: "joiner", msg: data });
+                    });
+                });
+            });
+        }
+    </script>
+</body>
+
+</html>
