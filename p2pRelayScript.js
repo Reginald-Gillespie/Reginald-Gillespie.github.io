@@ -3,12 +3,21 @@ var action = params.get("action");
 var room = params.get("room");
 var returnTo = params.get("returnTo");
 var fullAmount = parseInt(params.get("fullAmount") || "2", 10);
+var role = params.get("role");
 
 var joined = 0;
 var joinComplete = false;
+var bridgeConn = null;
+var bridgeQueue = [];
 
 function setStatus(msg) { document.getElementById("status").innerHTML = msg; }
 function setLobby(msg) { document.getElementById("lobby").textContent = msg; }
+
+function postToParent(payload) {
+    if (window.parent && window.parent !== window) {
+        window.parent.postMessage(payload, "*");
+    }
+}
 
 function bounce(extraParams) {
     extraParams = extraParams || {};
@@ -19,12 +28,14 @@ function bounce(extraParams) {
     setTimeout(function () { location.href = dest.toString(); }, 400);
 }
 
-if (!action || !room || !returnTo) {
+if (!action || !room || (action !== "bridge" && !returnTo)) {
     setStatus("Missing params.");
 } else if (action === "create") {
     runCreate();
 } else if (action === "join") {
     runJoin();
+} else if (action === "bridge") {
+    runBridge();
 } else {
     bounce({ peerEvent: "error", detail: "unknown_action" });
 }
@@ -40,6 +51,85 @@ function finalizeJoin(peer, role) {
     setStatus("");
     peer.destroy();
     bounce({ peerEvent: "connected_as_joiner", role: role });
+}
+
+function queueOrSend(data) {
+    if (bridgeConn && bridgeConn.open) {
+        bridgeConn.send(data);
+        return;
+    }
+    bridgeQueue.push(data);
+}
+
+function flushQueue() {
+    if (!bridgeConn || !bridgeConn.open) return;
+    while (bridgeQueue.length) {
+        bridgeConn.send(bridgeQueue.shift());
+    }
+}
+
+function attachBridgeConn(conn, roleName) {
+    bridgeConn = conn;
+
+    bridgeConn.on("error", function (err) {
+        postToParent({ type: "relay_bridge_error", room: room, detail: err.message });
+    });
+
+    bridgeConn.on("open", function () {
+        setStatus("");
+        setLobby("Lobby: " + room + "\nGame transport connected.");
+        flushQueue();
+        postToParent({ type: "relay_bridge_ready", room: room, role: roleName });
+    });
+
+    bridgeConn.on("data", function (data) {
+        postToParent({ type: "relay_bridge_data", room: room, data: data });
+    });
+}
+
+function runBridge() {
+    if (role !== "host" && role !== "joiner") {
+        setStatus("Missing role for bridge.");
+        postToParent({ type: "relay_bridge_error", room: room, detail: "missing_role" });
+        return;
+    }
+
+    setStatus('<span class="spinner">↻</span>');
+    setLobby("Lobby: " + room + "\nStarting game transport...");
+
+    var peer;
+
+    window.addEventListener("message", function (event) {
+        var msg = event.data;
+        if (!msg || msg.type !== "relay_send" || msg.room !== room) return;
+        queueOrSend(msg.data);
+    });
+
+    if (role === "host") {
+        peer = new Peer(room + "_game");
+
+        peer.on("error", function (err) {
+            postToParent({ type: "relay_bridge_error", room: room, detail: err.message });
+        });
+
+        peer.on("open", function () {
+            setLobby("Lobby: " + room + "\nWaiting for game peer...");
+            peer.on("connection", function (conn) {
+                attachBridgeConn(conn, "host");
+            });
+        });
+    } else {
+        peer = new Peer();
+
+        peer.on("error", function (err) {
+            postToParent({ type: "relay_bridge_error", room: room, detail: err.message });
+        });
+
+        peer.on("open", function () {
+            var conn = peer.connect(room + "_game");
+            attachBridgeConn(conn, "joiner");
+        });
+    }
 }
 
 function runCreate() {
