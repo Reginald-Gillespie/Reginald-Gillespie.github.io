@@ -54,16 +54,18 @@ function runCreate() {
                 joined++;
                 updateLobby(joined);
 
-                connections.forEach(function (c) { c.send(joined); });
+                setTimeout(function () {
+                    connections.forEach(function (c) { c.send(joined); });
 
-                if (joined >= fullAmount) {
-                    setStatus("");
-                    connections.forEach(function (c) { c.send("__full__"); });
-                    setTimeout(function () {
-                        peer.destroy();
-                        bounce({ peerEvent: "room_full", role: "host" });
-                    }, 200);
-                }
+                    if (joined >= fullAmount) {
+                        setStatus("");
+                        connections.forEach(function (c) { c.send("__full__"); });
+                        setTimeout(function () {
+                            peer.destroy();
+                            bounce({ peerEvent: "room_full", role: "host" });
+                        }, 600);
+                    }
+                }, 100);
             });
         });
     });
