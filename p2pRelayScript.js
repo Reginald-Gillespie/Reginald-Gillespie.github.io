@@ -5,6 +5,7 @@ var returnTo = params.get("returnTo");
 var fullAmount = parseInt(params.get("fullAmount") || "2", 10);
 
 var joined = 0;
+var joinComplete = false;
 
 function setStatus(msg) { document.getElementById("status").innerHTML = msg; }
 function setLobby(msg) { document.getElementById("lobby").textContent = msg; }
@@ -29,8 +30,16 @@ if (!action || !room || !returnTo) {
 }
 
 function updateLobby(connectedCount) {
-    var waiting = fullAmount - connectedCount;
+    var waiting = Math.max(0, fullAmount - connectedCount);
     setLobby("Lobby: " + room + "\nWaiting for " + waiting + "/" + fullAmount + " more people to join.");
+}
+
+function finalizeJoin(peer, role) {
+    if (joinComplete) return;
+    joinComplete = true;
+    setStatus("");
+    peer.destroy();
+    bounce({ peerEvent: "connected_as_joiner", role: role });
 }
 
 function runCreate() {
@@ -103,11 +112,14 @@ function runJoin() {
 
         conn.on("data", function (data) {
             if (data === "__full__") {
-                setStatus("");
-                peer.destroy();
-                bounce({ peerEvent: "connected_as_joiner", role: "joiner" });
+                finalizeJoin(peer, "joiner");
             } else if (typeof data === "number") {
-                var waiting = fullAmount - data;
+                if (data >= fullAmount) {
+                    finalizeJoin(peer, "joiner");
+                    return;
+                }
+
+                var waiting = Math.max(0, fullAmount - data);
                 setLobby("Lobby: " + room + "\nWaiting for " + waiting + "/" + fullAmount + " more people to join.");
             }
         });
